@@ -15,30 +15,41 @@ and the regional routing tiles (hundreds of MB) on disk. Serverless functions ar
 short-lived, memory-capped, and have no persistent mounted graph. So the engine
 must live on a small always-on host that Vercel calls over HTTP.
 
-## Hosting Valhalla for free: Oracle Cloud Always Free
+## Hosting Valhalla for free: Oracle Cloud Always Free (AMD Micro)
 
-Use an **Oracle Cloud Always Free Ampere (ARM) VM**. It's a real always-on cloud
-server (no home machine needed), free *forever*, with enough RAM (up to 24 GB / 4
-cores in the free tier) to run the California graph comfortably 24/7.
+Use an **Oracle Cloud Always Free VM.Standard.E2.1.Micro** (AMD, 1 vCPU / 1 GB RAM).
+The Ampere (ARM) shapes have more RAM but are frequently "out of capacity"; the AMD
+Micro is essentially always available. 1 GB can't build the whole-California graph,
+so `docker-compose.yml` is configured to use a small **Bay Area extract** (~175 MB,
+hosted as a release asset) plus a swap file for headroom.
 
-1. Create an Oracle Cloud account (free; a card is required for identity only —
-   Always Free resources don't charge).
-2. **Compute → Instances → Create instance.** Choose shape
-   **VM.Standard.A1.Flex** (Ampere/ARM), give it ~2 OCPU / 12 GB RAM (within the
-   Always Free allowance), image **Ubuntu 22.04**. Save the SSH key.
-   *(If you hit a capacity error, try a different Availability Domain or region.)*
-3. **Networking → open port 8002:** add an ingress rule to the VCN's default
-   security list for TCP 8002 from `0.0.0.0/0` (or lock it to Vercel later).
-4. SSH in and install Docker + bring up Valhalla:
+1. Create an Oracle Cloud account (free; card is for identity only — Always Free
+   doesn't charge).
+2. **Compute → Instances → Create instance:** shape **VM.Standard.E2.1.Micro**
+   (Always-Free-eligible), image **Ubuntu 22.04**. Under Networking, create a new
+   VCN + **public** subnet and auto-assign a public IP. **Download the SSH private
+   key** (only chance). Create.
+3. **Open port 8002:** instance → subnet → Default Security List → Add Ingress Rule
+   → Source `0.0.0.0/0`, TCP, port `8002`.
+4. SSH in (`ssh -i <key> ubuntu@<PUBLIC_IP>`) and run:
    ```bash
-   sudo apt update && sudo apt install -y docker.io docker-compose-plugin
+   # 2 GB swap so the build never OOMs on 1 GB RAM
+   sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+   sudo mkswap /swapfile && sudo swapon /swapfile
+   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+   sudo apt update && sudo apt install -y docker.io docker-compose-plugin git netfilter-persistent
+   sudo systemctl enable --now docker
+   sudo iptables -I INPUT 6 -p tcp --dport 8002 -j ACCEPT && sudo netfilter-persistent save
+
    git clone https://github.com/nate-bowers/deflockmaps.git && cd deflockmaps
-   sudo docker compose up -d        # first run downloads the CA extract + builds tiles
+   sudo docker compose up -d        # builds the Bay Area graph (~10–20 min on the Micro)
    ```
-   Also open the OS firewall: `sudo iptables -I INPUT -p tcp --dport 8002 -j ACCEPT`.
-5. The engine is now at `http://<VM_PUBLIC_IP>:8002`. (Optional but recommended:
-   put **Caddy** in front for automatic HTTPS so the URL is `https://…`.)
-6. Set **`VALHALLA_URL`** to that URL on your Vercel project.
+   Watch it with `sudo docker logs -f deflock-valhalla`; ready when it stops building.
+5. Verify: `curl http://localhost:8002/status`, then open
+   `http://<PUBLIC_IP>:8002/status` in a browser.
+6. Set **`VALHALLA_URL=http://<PUBLIC_IP>:8002`** on your Vercel project. (Plain HTTP
+   is fine — the app calls Valhalla server-side, so there's no mixed-content issue.)
 
 ## Step-by-step
 
