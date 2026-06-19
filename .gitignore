@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local Valhalla routing tiles + OSM extracts (large, regenerated)
+/valhalla_tiles/
+*.osm.pbf
+
+# but DO commit the example env file
+!.env.example

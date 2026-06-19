@@ -1,0 +1,26 @@
+# Local Valhalla routing engine for the DeFlock-avoidance demo.
+#
+# First `docker compose up` will:
+#   1. download the California OSM extract from Geofabrik (~1 GB), and
+#   2. build routing tiles into ./valhalla_tiles (one-time, can take a while).
+# Subsequent starts reuse the built tiles and come up in seconds.
+#
+# Routing API is then available at http://localhost:8002
+services:
+  valhalla:
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
+    container_name: deflock-valhalla
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./valhalla_tiles:/custom_files
+    environment:
+      # Geofabrik California extract — change this URL to route a different region.
+      - tile_urls=https://download.geofabrik.de/north-america/us/california-latest.osm.pbf
+      - use_tiles_ignore_pbf=False
+      - force_rebuild=False
+      - build_elevation=False
+      - build_admins=True
+      - build_time_zones=False
+      - server_threads=4
+    restart: unless-stopped

@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/refresh-cameras",
+      "schedule": "0 9 * * *"
+    }
+  ]
+}
