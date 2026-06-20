@@ -1,30 +1,14 @@
 # Local Valhalla routing engine for the DeFlock-avoidance demo.
 #
-# First `docker compose up` will:
-#   1. download the California OSM extract from Geofabrik (~1 GB), and
-#   2. build routing tiles into ./valhalla_tiles (one-time, can take a while).
-# Subsequent starts reuse the built tiles and come up in seconds.
+# Production: uses the prebuilt Bay Area image (tiles baked in) — `docker compose
+# up -d` pulls it and serves immediately, no build, no mounted tile files.
 #
-# Routing API is then available at http://localhost:8002
+# The image is built from the Bay Area OSM extract; to rebuild it from source see
+# scripts/ and the gis-ops/docker-valhalla base image.
 services:
   valhalla:
-    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
+    image: ghcr.io/nate-bowers/deflock-valhalla:latest
     container_name: deflock-valhalla
     ports:
       - "8002:8002"
-    volumes:
-      - ./valhalla_tiles:/custom_files
-    environment:
-      # Bay Area OSM extract (~175 MB) — small enough to build/serve on a 1 GB VM.
-      # bbox -122.7,37.1,-121.5,38.2 covers SF, Oakland, San Jose, the Peninsula and
-      # North Bay. To route a different region, swap this URL and delete valhalla_tiles/.
-      - tile_urls=https://github.com/nate-bowers/deflockmaps/releases/download/data-v1/bayarea.osm.pbf
-      # True: serve prebuilt tiles from valhalla_tiles/valhalla_tiles.tar (fast — no
-      # build, for low-power hosts). Set False to build from the pbf above instead.
-      - use_tiles_ignore_pbf=True
-      - force_rebuild=False
-      - build_elevation=False
-      - build_admins=True
-      - build_time_zones=False
-      - server_threads=2
     restart: unless-stopped
