@@ -46,3 +46,6 @@ next-env.d.ts
 
 # but DO commit the example env file
 !.env.example
+
+# Oracle Ampere watcher config (OCIDs) — keep the real one out, commit the sample
+/scripts/ampere.env

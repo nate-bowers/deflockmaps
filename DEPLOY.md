@@ -51,6 +51,30 @@ hosted as a release asset) plus a swap file for headroom.
 6. Set **`VALHALLA_URL=http://<PUBLIC_IP>:8002`** on your Vercel project. (Plain HTTP
    is fine — the app calls Valhalla server-side, so there's no mixed-content issue.)
 
+## Faster engine (free): upgrade to Ampere A1 when capacity opens
+
+The E2.1.Micro has ~1/8 of a CPU core, so each routing call takes ~2–4 s and the
+`max` camera-peel stalls on long routes (it runs out of the 60 s request budget
+before it can dodge everything — benchmarked: the *same* call is ~0.2 s on a real
+CPU). The fix is Oracle's **other** Always-Free tier, **Ampere A1** (ARM, up to
+4 OCPU / 24 GB, also $0). On it, long routes peel to their true floor (e.g.
+Tiburon→Atherton ~6 cameras) in well under the budget.
+
+A1 capacity is usually "Out of host capacity," so grab it with the watcher:
+
+```bash
+brew install oci-cli && oci setup config        # one-time
+cp scripts/ampere.env.example scripts/ampere.env
+bash scripts/ampere-watch.sh --discover         # lists the OCIDs to paste in
+# fill in scripts/ampere.env, then:
+caffeinate -is bash scripts/ampere-watch.sh      # retries until it lands, then pings you
+```
+
+When it lands: SSH in, install Docker, run `scripts/deploy-engine.sh` (the tile
+image is multi-arch, so it runs on ARM unchanged), open port 8002, then repoint
+`VALHALLA_URL` at the new IP and redeploy. Nothing in the app code changes — the
+camera-avoidance quality improvement comes entirely from the faster CPU.
+
 ## Step-by-step
 
 1. **Push to GitHub**, import the repo on Vercel.
