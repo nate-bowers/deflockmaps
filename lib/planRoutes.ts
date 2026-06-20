@@ -172,15 +172,28 @@ export async function planRoutes(
   calls++;
   let captured = record(current);
 
-  // Two-mode dodge:
-  //  - BULK: exclude every camera the route passes at once and reroute. On easy
-  //    routes (parallel streets nearby) this lands camera-free in a couple calls.
-  //  - GREEDY: when bulk stops helping (the big detour just hits new cameras, or
-  //    a chokepoint), peel cameras off ONE at a time — each pass probes several
-  //    candidates in parallel and commits the exclusion that yields the fewest
-  //    cameras. Slower, but it finds the efficient side-street path on long,
-  //    camera-dense routes (where bulk dumps you onto 30+ new cameras).
-  let bulk = true;
+  // Greedy peel with speculative batching.
+  //
+  // Each pass probes several captured cameras individually (in parallel) and
+  // keeps only the ones whose exclusion actually cuts the camera count — the
+  // "real" peels. Those are then excluded ALL AT ONCE and the combined route is
+  // verified: on a long route the per-camera detours are independent, so this
+  // removes many cameras per pass instead of one (one-at-a-time can't peel a
+  // 49-mile route deep enough within the time budget). If the detours interfere
+  // (the combined route is no better), we fall back to committing just the
+  // single best peel.
+  //
+  // Excluding ONLY individually-helpful cameras is what keeps us from blowing
+  // the limited exclusion budget: a blanket "exclude every hit at once" spends
+  // budget on cameras whose avoidance merely shoves the route onto a different
+  // camera, which is exactly what made long routes regress before.
+  const commit = (route: RouteResult, avoided: Camera[], cams: Camera[]) => {
+    cams.forEach((c) => excluded.set(c.id, c));
+    current = route;
+    captured = avoided;
+    record(current);
+  };
+
   while (
     captured.length > 0 &&
     raw.length <= limits.passes &&
@@ -193,20 +206,6 @@ export async function planRoutes(
     );
     if (candidates.length === 0) break;
 
-    if (bulk) {
-      const batch = candidates.slice(0, MAX_EXCLUDED - excluded.size);
-      const whole = await tryRoute(batch);
-      const avoided = whole ? measure(whole).avoided : null;
-      if (whole && avoided && avoided.length < captured.length) {
-        batch.forEach((c) => excluded.set(c.id, c));
-        current = whole;
-        captured = avoided;
-        record(current);
-        continue;
-      }
-      bulk = false; // bulk exclusion stopped reducing cameras — go per-camera
-    }
-
     const probe = candidates.slice(0, TRIALS_PER_PASS);
     const results = await Promise.all(
       probe.map(async (c) => {
@@ -214,21 +213,46 @@ export async function planRoutes(
         return { c, route, avoided: route ? measure(route).avoided : null };
       }),
     );
-    let best: { c: Camera; route: RouteResult; avoided: Camera[] } | null = null;
+
+    type Peel = { c: Camera; route: RouteResult; avoided: Camera[] };
+    const routable: Peel[] = [];
     for (const r of results) {
       if (!r.route || !r.avoided) {
         undodgeable.add(r.c.id); // can't route excluding this one — chokepoint
         continue;
       }
-      if (!best || r.avoided.length < best.avoided.length) {
-        best = { c: r.c, route: r.route, avoided: r.avoided };
-      }
+      routable.push({ c: r.c, route: r.route, avoided: r.avoided });
     }
-    if (!best) break; // every probed camera is un-dodgeable
-    excluded.set(best.c.id, best.c);
-    current = best.route;
-    captured = best.avoided;
-    record(current);
+    if (routable.length === 0) break; // every probed camera is un-dodgeable
+
+    // Sort best-first (fewest remaining cameras). "Helpful" = strictly improves.
+    routable.sort((a, b) => a.avoided.length - b.avoided.length);
+    const helpful = routable.filter((r) => r.avoided.length < captured.length);
+
+    if (helpful.length === 0) {
+      // Nothing in this window helps. Take the least-bad single move to keep the
+      // search progressing onto fresh ground (the best route so far is already
+      // preserved in `raw`, so a sideways step can't worsen the final result).
+      commit(routable[0].route, routable[0].avoided, [routable[0].c]);
+      continue;
+    }
+
+    if (helpful.length === 1) {
+      commit(helpful[0].route, helpful[0].avoided, [helpful[0].c]);
+      continue;
+    }
+
+    // Several individually-helpful cameras — try excluding them all together.
+    const batch = helpful
+      .slice(0, MAX_EXCLUDED - excluded.size)
+      .map((h) => h.c);
+    const combined = await tryRoute(batch);
+    const combinedAvoided = combined ? measure(combined).avoided : null;
+    if (combined && combinedAvoided && combinedAvoided.length < captured.length) {
+      commit(combined, combinedAvoided, batch); // detours independent — peel many
+    } else {
+      commit(helpful[0].route, helpful[0].avoided, [helpful[0].c]); // interfered
+    }
   }
 
   const cameraFreeExists = raw.some((o) => o.cameraCount === 0);
