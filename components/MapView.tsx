@@ -109,6 +109,13 @@ export default function MapView() {
   const [error, setError] = useState<string | null>(null);
   const [cameraCount, setCameraCount] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  // When a full route exists, a map tap shows this confirm menu instead of
+  // silently resetting — so a stray tap can't wipe your route.
+  const [pendingClick, setPendingClick] = useState<{
+    pt: Pt;
+    x: number;
+    y: number;
+  } | null>(null);
 
   function setStartPt(p: Pt | null) {
     startRef.current = p;
@@ -239,20 +246,25 @@ export default function MapView() {
     map.on("styledata", trySetup);
     trySetup();
 
-    // Click: 1st sets start, 2nd sets end, 3rd resets to a new start.
+    // Click: 1st sets start, 2nd sets end. Once a full route exists, a tap opens
+    // a confirm menu (start/destination) rather than wiping the route.
     map.on("click", (e) => {
       const pt = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+      if (startRef.current && endRef.current) {
+        setPendingClick({ pt, x: e.point.x, y: e.point.y });
+        return;
+      }
       const label = `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`;
-      if (!startRef.current || (startRef.current && endRef.current)) {
+      if (!startRef.current) {
         setStartPt(pt);
         setStartText(label);
-        setEndPt(null);
-        setEndText("");
       } else {
         setEndPt(pt);
         setEndText(label);
       }
     });
+    // Dismiss the confirm menu when the map moves.
+    map.on("movestart", () => setPendingClick(null));
 
     return () => {
       map.remove();
@@ -419,6 +431,21 @@ export default function MapView() {
     setResult(null);
     setSelectedId(null);
     setError(null);
+    setPendingClick(null);
+  }
+
+  function applyPending(which: "start" | "end") {
+    if (!pendingClick) return;
+    const { pt } = pendingClick;
+    const label = `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}`;
+    if (which === "start") {
+      setStartPt(pt);
+      setStartText(label);
+    } else {
+      setEndPt(pt);
+      setEndText(label);
+    }
+    setPendingClick(null);
   }
 
   function downloadGpx() {
@@ -454,6 +481,40 @@ export default function MapView() {
       {/* h-full (not absolute inset-0): maplibre-gl.css forces position:relative on
           its container, which would override `absolute` and collapse the height. */}
       <div ref={mapContainer} className="h-full w-full" />
+
+      {/* Tap-confirm menu (prevents a stray tap from wiping the route) */}
+      {pendingClick && (
+        <div
+          className="absolute z-20 -translate-x-1/2 -translate-y-[calc(100%+12px)]"
+          style={{ left: pendingClick.x, top: pendingClick.y }}
+        >
+          <div className="flex items-stretch overflow-hidden rounded-lg bg-zinc-900/95 text-xs font-medium text-zinc-200 shadow-xl ring-1 ring-white/10">
+            <button
+              type="button"
+              onClick={() => applyPending("start")}
+              className="flex items-center gap-1.5 px-3 py-2 transition hover:bg-white/10"
+            >
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              Start
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPending("end")}
+              className="flex items-center gap-1.5 border-l border-white/10 px-3 py-2 transition hover:bg-white/10"
+            >
+              <span className="h-2 w-2 rounded-full bg-rose-400" />
+              Destination
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingClick(null)}
+              className="border-l border-white/10 px-2.5 py-2 text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Basemap switcher */}
       <div className="absolute bottom-4 right-4 z-10 flex gap-0.5 rounded-lg bg-zinc-900/85 p-1 text-xs font-medium text-zinc-400 ring-1 ring-white/10 backdrop-blur">
