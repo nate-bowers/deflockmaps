@@ -81,7 +81,8 @@ const LIMITS: Record<
   // so far when it's hit, so the UI stays responsive even if the remote engine
   // is slow. balanced feels snappy; max trades time for thoroughness.
   balanced: { passes: 10, calls: 60, excluded: 60, budgetMs: 8000 },
-  max: { passes: 45, calls: 250, excluded: 120, budgetMs: 35000 },
+  // Max prioritizes correctness over speed — generous budget so it fully dodges.
+  max: { passes: 80, calls: 400, excluded: 160, budgetMs: 45000 },
 };
 
 // Per pass, try this many camera exclusions concurrently. Each Valhalla call to a

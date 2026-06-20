@@ -56,7 +56,7 @@ export function selectRouteWaypoints(route: LatLng[], max: number): LatLng[] {
       bearing(route[i - 1], route[i]),
       bearing(route[i], route[i + 1]),
     );
-    if (angle >= 22) turns.push({ idx: i, angle });
+    if (angle >= 16) turns.push({ idx: i, angle });
   }
 
   const chosen = new Set<number>();

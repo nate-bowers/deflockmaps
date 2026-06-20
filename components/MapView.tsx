@@ -101,7 +101,7 @@ export default function MapView() {
   const [endText, setEndText] = useState("");
 
   const [useDirection, setUseDirection] = useState(true);
-  const [level, setLevel] = useState<"balanced" | "max">("balanced");
+  const [level, setLevel] = useState<"balanced" | "max">("max");
   const [basemap, setBasemap] = useState<BasemapKey>("city");
   const [result, setResult] = useState<PlanResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -109,6 +109,7 @@ export default function MapView() {
   const [error, setError] = useState<string | null>(null);
   const [cameraCount, setCameraCount] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [geocodeCapped, setGeocodeCapped] = useState<string | null>(null);
   // When a full route exists, a map tap shows this confirm menu instead of
   // silently resetting — so a stray tap can't wipe your route.
   const [pendingClick, setPendingClick] = useState<{
@@ -371,7 +372,10 @@ export default function MapView() {
           return;
         }
         setResult(json);
-        setSelectedId(json.options?.[0]?.id ?? null);
+        // Default to the LOWEST-camera option (the point of the app) rather than
+        // "Fastest", which goes through cameras. Options are sorted fastest→fewest.
+        const opts: RouteOption[] = json.options ?? [];
+        setSelectedId(opts[opts.length - 1]?.id ?? null);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       } finally {
@@ -550,6 +554,12 @@ export default function MapView() {
               : "Loading cameras…"}
           </p>
 
+          {geocodeCapped && (
+            <p className="mt-3 rounded-lg bg-red-500/15 p-2.5 text-xs font-medium leading-snug text-red-300 ring-1 ring-red-500/30">
+              ⚠ {geocodeCapped}
+            </p>
+          )}
+
           {/* Address / coordinate inputs */}
           <div className="mt-4 space-y-2">
             <LocationInput
@@ -558,6 +568,7 @@ export default function MapView() {
               dotColor="#34d399"
               onChange={setStartText}
               onSelect={(pt) => setStartPt(pt)}
+              onCapped={setGeocodeCapped}
             />
             <LocationInput
               placeholder="Destination — address or lat, lng"
@@ -565,6 +576,7 @@ export default function MapView() {
               dotColor="#f43f5e"
               onChange={setEndText}
               onSelect={(pt) => setEndPt(pt)}
+              onCapped={setGeocodeCapped}
             />
             <p className="text-[11px] text-zinc-500">
               Type for suggestions, or click the map to drop points.
@@ -798,12 +810,14 @@ function LocationInput({
   dotColor,
   onChange,
   onSelect,
+  onCapped,
 }: {
   placeholder: string;
   value: string;
   dotColor: string;
   onChange: (v: string) => void;
   onSelect: (pt: Pt) => void;
+  onCapped?: (msg: string) => void;
 }) {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -827,6 +841,7 @@ function LocationInput({
       try {
         const res = await fetch(`/api/geocode?q=${encodeURIComponent(text)}`);
         const json = await res.json();
+        if (json.capped && json.message) onCapped?.(json.message);
         if (res.ok && Array.isArray(json.results)) {
           setSuggestions(json.results);
           setOpen(json.results.length > 0);

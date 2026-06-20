@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { clientIp, rateLimit } from "@/lib/rateLimit";
+import { blobConfigured, checkAndRecord } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
+
+// Hard monthly cap on paid (Mapbox) geocoding so we never hit paid overage.
+// Set below Mapbox's 100k/mo free tier to leave a safety margin for races.
+const MAPBOX_MONTHLY_CAP = 95_000;
 
 // Geocoding for the address autocomplete. Default provider is **Photon**
 // (komoot) — free, no key, and purpose-built for type-ahead (fast, good prefix
@@ -87,10 +92,28 @@ export async function GET(req: Request) {
     );
   }
 
+  // Use Mapbox only when a token AND a Blob store are present — the Blob counter
+  // enforces the monthly cap, so paid geocoding can never run uncapped. Once the
+  // cap is hit, fall back to the free Photon geocoder and flag it loudly.
+  const token = process.env.MAPBOX_TOKEN;
   let results: Result[];
+  let capped = false;
   try {
-    const token = process.env.MAPBOX_TOKEN;
-    results = token ? await viaMapbox(q, token) : await viaPhoton(q);
+    if (token && blobConfigured()) {
+      const { allowed } = await checkAndRecord(MAPBOX_MONTHLY_CAP);
+      if (allowed) {
+        try {
+          results = await viaMapbox(q, token);
+        } catch {
+          results = await viaPhoton(q); // Mapbox hiccup → free fallback
+        }
+      } else {
+        capped = true;
+        results = await viaPhoton(q);
+      }
+    } else {
+      results = await viaPhoton(q);
+    }
   } catch (err) {
     return NextResponse.json(
       { error: `Geocoding failed: ${(err as Error).message}` },
@@ -98,11 +121,15 @@ export async function GET(req: Request) {
     );
   }
 
-  if (results.length === 0) {
+  if (results.length === 0 && !capped) {
     return NextResponse.json({ error: `No match for "${q}"` }, { status: 404 });
   }
 
-  const body = { results };
-  cache.set(q.toLowerCase(), { body, exp: Date.now() + CACHE_TTL });
+  const cappedMsg = capped
+    ? "Monthly address-search limit reached — basic search active until next month."
+    : undefined;
+  const body = { results, capped, message: cappedMsg };
+  // Don't cache the capped state (it should clear when the month rolls over).
+  if (!capped) cache.set(q.toLowerCase(), { body, exp: Date.now() + CACHE_TTL });
   return NextResponse.json(body);
 }
