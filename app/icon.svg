@@ -1,0 +1,11 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="32" height="32" rx="7" fill="#0F1620"/>
+  <!-- route: a path curving up to the destination -->
+  <path d="M8 25 C 9 19, 15 21, 20 18" stroke="#34D399" stroke-width="2.6"
+        stroke-linecap="round" fill="none" stroke-dasharray="0.1 4.4"/>
+  <circle cx="8" cy="25" r="2.4" fill="#34D399"/>
+  <!-- destination pin -->
+  <path d="M20 5 C 16.7 5 14 7.6 14 10.8 C 14 15 20 20 20 20 C 20 20 26 15 26 10.8 C 26 7.6 23.3 5 20 5 Z"
+        fill="#34D399"/>
+  <circle cx="20" cy="10.8" r="2.2" fill="#0F1620"/>
+</svg>

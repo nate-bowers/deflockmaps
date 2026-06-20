@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Flock-avoidance routing",
+  title: "DeFlock Maps",
   description: "Driving routes that avoid ALPR (Flock) cameras",
 };
 
