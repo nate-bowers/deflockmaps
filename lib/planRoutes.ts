@@ -19,7 +19,7 @@ import {
   type CameraHit,
   type LatLng,
 } from "./geo";
-import { NoRouteError, valhallaRoute } from "./valhalla";
+import { NoRouteError, valhallaRoute, type RouteResult } from "./valhalla";
 
 export type RouteOption = {
   id: string;
@@ -77,9 +77,15 @@ const LIMITS: Record<
   AvoidanceLevel,
   { passes: number; calls: number; excluded: number }
 > = {
-  balanced: { passes: 12, calls: 45, excluded: 60 },
-  max: { passes: 200, calls: 150, excluded: 200 },
+  balanced: { passes: 10, calls: 60, excluded: 60 },
+  max: { passes: 45, calls: 250, excluded: 120 },
 };
+
+// Per pass, try this many camera exclusions concurrently. Each Valhalla call to a
+// remote engine costs a full network round-trip, so parallelizing the trials
+// (instead of one-at-a-time) is what keeps routing fast — wall-clock is bounded
+// by the number of passes, not the total number of calls.
+const TRIALS_PER_PASS = 6;
 
 export async function planRoutes(
   start: LatLng,
@@ -140,46 +146,60 @@ export async function planRoutes(
   calls++;
   let captured = record(current); // cameras capturing this route
 
-  // Greedily dodge one camera at a time. Stop once we've excluded enough that
-  // we'd approach Valhalla's exclude-polygon budget (10k points ≈ 1k circles) —
-  // MAX_EXCLUDED keeps us comfortably under it even on hour-long routes.
+  // Greedily dodge cameras. Each pass tries excluding several captured cameras
+  // IN PARALLEL, marks the un-dodgeable ones (those on the only through-road),
+  // and commits the exclusion that yields the route with the fewest cameras.
+  type Trial =
+    | { cam: Camera; route: RouteResult }
+    | { cam: Camera; undodgeable: true }
+    | { cam: Camera; failed: true };
+
   while (
     raw.length <= limits.passes &&
     calls < limits.calls &&
     excluded.size < limits.excluded
   ) {
-    const candidates = captured.filter(
+    const remaining = captured.filter(
       (c) => !excluded.has(c.id) && !undodgeable.has(c.id),
     );
-    if (candidates.length === 0) break; // nothing left we can try to dodge
+    if (remaining.length === 0) break; // nothing left we can try to dodge
+    const candidates = remaining.slice(0, TRIALS_PER_PASS);
+    calls += candidates.length;
 
-    let progressed = false;
-    let limitHit = false;
-    for (const cam of candidates) {
-      if (calls >= limits.calls) break;
-      let trial;
-      try {
-        trial = await valhallaRoute(start, end, polysFor(cam));
-        calls++;
-      } catch (err) {
-        if (err instanceof NoRouteError) {
-          calls++;
-          undodgeable.add(cam.id); // on the only through-road — can't avoid it
-          continue;
+    const trials: Trial[] = await Promise.all(
+      candidates.map(async (cam): Promise<Trial> => {
+        try {
+          return { cam, route: await valhallaRoute(start, end, polysFor(cam)) };
+        } catch (err) {
+          if (err instanceof NoRouteError) return { cam, undodgeable: true };
+          return { cam, failed: true }; // e.g. exclude-polygon limit / engine error
         }
-        // Any other Valhalla error (e.g. exclude-polygon limit) — stop the
-        // sweep gracefully and return the options found so far rather than
-        // failing the whole request.
-        limitHit = true;
-        break;
+      }),
+    );
+
+    const limitHit = trials.some((t) => "failed" in t);
+    for (const t of trials) if ("undodgeable" in t) undodgeable.add(t.cam.id);
+
+    // Commit the successful exclusion that leaves the fewest captured cameras.
+    let best: { cam: Camera; route: RouteResult; avoided: Camera[] } | null = null;
+    for (const t of trials) {
+      if (!("route" in t)) continue;
+      const avoided = measure(t.route).avoided;
+      if (!best || avoided.length < best.avoided.length) {
+        best = { cam: t.cam, route: t.route, avoided };
       }
-      excluded.set(cam.id, cam);
-      current = trial;
-      captured = record(current);
-      progressed = true;
-      break; // re-evaluate captures on the new route
     }
-    if (limitHit || !progressed) break;
+
+    if (best) {
+      excluded.set(best.cam.id, best.cam);
+      current = best.route;
+      captured = best.avoided;
+      record(current);
+    }
+
+    if (limitHit) break;
+    // No dodge found and we tried every remaining candidate → done.
+    if (!best && candidates.length === remaining.length) break;
   }
 
   const cameraFreeExists = raw.some((o) => o.cameraCount === 0);
