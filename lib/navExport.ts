@@ -1,12 +1,12 @@
 // Deep links into external navigation apps + shareable-link encoding.
-import { sampleWaypoints, type LatLng } from "./geo";
+import { selectRouteWaypoints, type LatLng } from "./geo";
 
 const fmt = (p: LatLng) => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
 
 /**
- * Google Maps directions URL. Google supports intermediate waypoints, so we
- * sample points along our computed route — this makes Google actually follow
- * the camera-avoidance path rather than recomputing its own fastest route.
+ * Google Maps directions URL. Google supports intermediate waypoints, so we pin
+ * points at the route's TURNS — this makes Google follow the camera-avoidance
+ * path (including side-street detours) rather than its own fastest route.
  * (api=1 supports up to ~9 waypoints.)
  */
 export function googleMapsUrl(
@@ -14,7 +14,7 @@ export function googleMapsUrl(
   end: LatLng,
   routeGeometry: LatLng[],
 ): string {
-  const waypoints = sampleWaypoints(routeGeometry, 8);
+  const waypoints = selectRouteWaypoints(routeGeometry, 9);
   const params = new URLSearchParams({
     api: "1",
     origin: fmt(start),
@@ -25,19 +25,6 @@ export function googleMapsUrl(
     params.set("waypoints", waypoints.map(fmt).join("|"));
   }
   return `https://www.google.com/maps/dir/?${params.toString()}`;
-}
-
-/**
- * Apple Maps URL. Apple's URL scheme does NOT support intermediate waypoints,
- * so this navigates straight to the destination (won't follow our route).
- */
-export function appleMapsUrl(start: LatLng, end: LatLng): string {
-  return `https://maps.apple.com/?saddr=${fmt(start)}&daddr=${fmt(end)}&dirflg=d`;
-}
-
-/** Waze URL — destination only (no waypoint support). */
-export function wazeUrl(end: LatLng): string {
-  return `https://waze.com/ul?ll=${fmt(end)}&navigate=yes`;
 }
 
 /**

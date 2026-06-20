@@ -38,34 +38,46 @@ export function decodePolyline(encoded: string, precision = 6): LatLng[] {
 }
 
 /**
- * Sample `n` interior points evenly spaced by distance along a route polyline.
- * Used to seed external nav apps (Google Maps) with waypoints so they follow our
- * camera-avoidance path instead of their own fastest route.
+ * Pick up to `max` waypoints along a route to seed an external nav app (Google
+ * Maps) so it follows our camera-avoidance path instead of snapping back to the
+ * parallel arterial.
+ *
+ * Crucially these are placed at TURNS (intersections / decision points), not
+ * evenly by distance — a waypoint right where the route turns onto a side street
+ * is what forces the external app down that street. Remaining budget is filled
+ * with evenly-spaced points so long straight stretches stay pinned too.
  */
-export function sampleWaypoints(route: LatLng[], n: number): LatLng[] {
-  if (route.length <= 2 || n <= 0) return [];
-  const cum = [0];
-  for (let i = 1; i < route.length; i++) {
-    cum.push(cum[i - 1] + haversine(route[i - 1], route[i]));
-  }
-  const total = cum[cum.length - 1];
-  if (total === 0) return [];
+export function selectRouteWaypoints(route: LatLng[], max: number): LatLng[] {
+  if (route.length <= 2 || max <= 0) return [];
 
-  const points: LatLng[] = [];
-  for (let k = 1; k <= n; k++) {
-    const target = (total * k) / (n + 1);
-    let i = 1;
-    while (i < cum.length - 1 && cum[i] < target) i++;
-    const segLen = cum[i] - cum[i - 1] || 1;
-    const t = (target - cum[i - 1]) / segLen;
-    const a = route[i - 1];
-    const b = route[i];
-    points.push({
-      lat: a.lat + (b.lat - a.lat) * t,
-      lng: a.lng + (b.lng - a.lng) * t,
-    });
+  const turns: { idx: number; angle: number }[] = [];
+  for (let i = 1; i < route.length - 1; i++) {
+    const angle = angularDiff(
+      bearing(route[i - 1], route[i]),
+      bearing(route[i], route[i + 1]),
+    );
+    if (angle >= 22) turns.push({ idx: i, angle });
   }
-  return points;
+
+  const chosen = new Set<number>();
+  // Avoid clustering several waypoints at one complex intersection.
+  const minSep = Math.max(2, Math.floor(route.length / (max * 4)));
+  const farEnough = (i: number) =>
+    ![...chosen].some((c) => Math.abs(c - i) < minSep);
+
+  // 1) sharpest turns first, spatially spread.
+  for (const t of [...turns].sort((a, b) => b.angle - a.angle)) {
+    if (chosen.size >= max) break;
+    if (farEnough(t.idx)) chosen.add(t.idx);
+  }
+
+  // 2) fill remaining budget with evenly-spaced points.
+  for (let k = 1; k <= max && chosen.size < max; k++) {
+    const idx = Math.round(((route.length - 1) * k) / (max + 1));
+    if (idx > 0 && idx < route.length - 1 && farEnough(idx)) chosen.add(idx);
+  }
+
+  return [...chosen].sort((a, b) => a - b).map((i) => route[i]);
 }
 
 /** Great-circle distance in meters between two points. */
