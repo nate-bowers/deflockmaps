@@ -23,8 +23,18 @@ if [ "$size" -lt 100000000 ]; then
   exit 1
 fi
 
+echo "==> compose flag (want use_tiles_ignore_pbf=True):"
+grep use_tiles_ignore_pbf docker-compose.yml || true
+
+echo "==> Confirming the container will see the tar:"
+ls -lh valhalla_tiles/valhalla_tiles.tar
+
 echo "==> Starting engine (serves directly from the tar, no build)..."
 docker compose up -d
+
+echo "==> Engine startup decision (want 'Jumping directly to the tile loading'):"
+sleep 10
+docker logs deflock-valhalla 2>&1 | grep -iE "use_tiles_ignore_pbf|new build|tile loading|Jumping|Starting valhalla" | head -4 || true
 
 echo "==> Waiting for it to come online..."
 for i in $(seq 1 24); do
