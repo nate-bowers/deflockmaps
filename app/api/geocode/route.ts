@@ -3,18 +3,70 @@ import { clientIp, rateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
-// Free geocoding via OpenStreetMap Nominatim. Proxied server-side so we can set
-// a proper User-Agent (required), bias results to the Bay Area, cache, and rate
-// limit. Nominatim's usage policy caps this at ~1 req/sec — caching keeps us well
-// under it. For higher traffic, self-host Nominatim or use a keyed provider.
-const NOMINATIM = "https://nominatim.openstreetmap.org/search";
-// Bias toward the SF Bay Area: viewbox = west,north,east,south
-const BAY_VIEWBOX = "-122.6,38.1,-121.6,37.1";
+// Geocoding for the address autocomplete. Default provider is **Photon**
+// (komoot) — free, no key, and purpose-built for type-ahead (fast, good prefix
+// matching) which beats Nominatim for autocomplete. If MAPBOX_TOKEN is set we use
+// Mapbox instead, which has far better US street-address coverage (free tier is
+// 100k req/mo). Results are cached and rate-limited either way.
+const PHOTON = "https://photon.komoot.io/api/";
+const MAPBOX = "https://api.mapbox.com/geocoding/v5/mapbox.places/";
+// Bias toward the SF Bay Area.
+const BIAS_LAT = 37.8;
+const BIAS_LON = -122.27;
 
-// Simple in-memory cache (autocomplete repeats the same prefixes a lot).
+type Result = { lat: number; lng: number; label: string };
+
 type CacheEntry = { body: unknown; exp: number };
 const cache = new Map<string, CacheEntry>();
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+function dedupeJoin(parts: (string | undefined)[]): string {
+  const clean = parts.filter((p): p is string => !!p);
+  return clean.filter((v, i) => v !== clean[i - 1]).join(", ");
+}
+
+async function viaPhoton(q: string): Promise<Result[]> {
+  const url =
+    `${PHOTON}?q=${encodeURIComponent(q)}&limit=6&lang=en` +
+    `&lat=${BIAS_LAT}&lon=${BIAS_LON}`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": "deflockmaps/0.1 (camera-avoidance routing)" },
+  });
+  if (!res.ok) throw new Error(`Photon HTTP ${res.status}`);
+  const data = (await res.json()) as {
+    features?: Array<{
+      geometry: { coordinates: [number, number] };
+      properties: Record<string, string>;
+    }>;
+  };
+  return (data.features ?? [])
+    .filter((f) => f.geometry?.coordinates)
+    .map((f) => {
+      const p = f.properties;
+      const street = [p.housenumber, p.street].filter(Boolean).join(" ");
+      const label = dedupeJoin([
+        street || p.name,
+        p.city || p.town || p.village || p.district,
+        p.state,
+      ]);
+      const [lng, lat] = f.geometry.coordinates;
+      return { lat, lng, label: label || p.name || q };
+    });
+}
+
+async function viaMapbox(q: string, token: string): Promise<Result[]> {
+  const url =
+    `${MAPBOX}${encodeURIComponent(q)}.json?access_token=${token}` +
+    `&autocomplete=true&limit=6&country=us&proximity=${BIAS_LON},${BIAS_LAT}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Mapbox HTTP ${res.status}`);
+  const data = (await res.json()) as {
+    features?: Array<{ center: [number, number]; place_name: string }>;
+  };
+  return (data.features ?? [])
+    .filter((f) => f.center)
+    .map((f) => ({ lat: f.center[1], lng: f.center[0], label: f.place_name }));
+}
 
 export async function GET(req: Request) {
   const q = new URL(req.url).searchParams.get("q")?.trim();
@@ -27,7 +79,7 @@ export async function GET(req: Request) {
     return NextResponse.json(cached.body);
   }
 
-  const rl = rateLimit(`geocode:${clientIp(req)}`, 30, 60_000);
+  const rl = rateLimit(`geocode:${clientIp(req)}`, 40, 60_000);
   if (!rl.ok) {
     return NextResponse.json(
       { error: "Too many requests — slow down a moment." },
@@ -35,39 +87,16 @@ export async function GET(req: Request) {
     );
   }
 
-  const url =
-    `${NOMINATIM}?format=json&limit=5&addressdetails=0` +
-    `&viewbox=${BAY_VIEWBOX}&q=${encodeURIComponent(q)}`;
-
-  let data: unknown;
+  let results: Result[];
   try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "deflockmaps-demo/0.1 (camera-avoidance routing demo)",
-        "Accept-Language": "en",
-      },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    data = await res.json();
+    const token = process.env.MAPBOX_TOKEN;
+    results = token ? await viaMapbox(q, token) : await viaPhoton(q);
   } catch (err) {
     return NextResponse.json(
       { error: `Geocoding failed: ${(err as Error).message}` },
       { status: 502 },
     );
   }
-
-  const arr = (Array.isArray(data) ? data : []) as Array<{
-    lat: string;
-    lon: string;
-    display_name: string;
-  }>;
-  const results = arr
-    .filter((r) => r.lat != null && r.lon != null)
-    .map((r) => ({
-      lat: Number(r.lat),
-      lng: Number(r.lon),
-      label: r.display_name,
-    }));
 
   if (results.length === 0) {
     return NextResponse.json({ error: `No match for "${q}"` }, { status: 404 });

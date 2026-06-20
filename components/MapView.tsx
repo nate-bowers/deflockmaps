@@ -839,7 +839,7 @@ function LocationInput({
       } finally {
         setLoading(false);
       }
-    }, 350);
+    }, 220);
     return () => clearTimeout(id);
   }, [value]);
 
