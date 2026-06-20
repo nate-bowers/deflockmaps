@@ -75,10 +75,13 @@ function partitionHits(hits: CameraHit[], useDirection: boolean) {
 // exclude-polygon budget in both modes.
 const LIMITS: Record<
   AvoidanceLevel,
-  { passes: number; calls: number; excluded: number }
+  { passes: number; calls: number; excluded: number; budgetMs: number }
 > = {
-  balanced: { passes: 10, calls: 60, excluded: 60 },
-  max: { passes: 45, calls: 250, excluded: 120 },
+  // budgetMs is a hard wall-clock cap: the sweep returns the best routes found
+  // so far when it's hit, so the UI stays responsive even if the remote engine
+  // is slow. balanced feels snappy; max trades time for thoroughness.
+  balanced: { passes: 10, calls: 60, excluded: 60, budgetMs: 8000 },
+  max: { passes: 45, calls: 250, excluded: 120, budgetMs: 35000 },
 };
 
 // Per pass, try this many camera exclusions concurrently. Each Valhalla call to a
@@ -141,6 +144,8 @@ export async function planRoutes(
     return avoided;
   };
 
+  const deadline = Date.now() + limits.budgetMs;
+
   // Baseline fastest route (no avoidance).
   let current = await valhallaRoute(start, end, []);
   calls++;
@@ -157,7 +162,8 @@ export async function planRoutes(
   while (
     raw.length <= limits.passes &&
     calls < limits.calls &&
-    excluded.size < limits.excluded
+    excluded.size < limits.excluded &&
+    Date.now() < deadline
   ) {
     const remaining = captured.filter(
       (c) => !excluded.has(c.id) && !undodgeable.has(c.id),
