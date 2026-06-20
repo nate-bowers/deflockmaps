@@ -45,13 +45,12 @@ export type PlanResult = {
   level: AvoidanceLevel;
 };
 
-// Detection threshold MUST stay well below the exclusion radius: once a camera
-// is excluded the reroute is forced ~EXCLUDE_RADIUS_M away, so a smaller
-// detection threshold guarantees that excluded camera is not re-counted as a
-// hit (which would stall the sweep via the `added` check). The gap between them
-// is what lets the planner keep peeling the route onto quieter parallel/side
-// streets pass after pass instead of giving up after one detour.
-const ROUTE_THRESHOLD_M = 22; // how close to the line counts as "captured"
+// How close the route passes a camera to count as "captured". ALPRs read plates
+// from a fair distance, so this is generous — better to dodge a camera you'd
+// only graze than to drive right past it. It MUST stay below the exclusion
+// radius's apothem (~37 m for a 40 m octagon) so an excluded camera, with the
+// reroute forced outside its bubble, is never re-counted as a hit.
+const ROUTE_THRESHOLD_M = 30; // how close to the line counts as "captured"
 const EXCLUDE_RADIUS_M = 40; // hard-avoid bubble per camera (reliably blocks the road)
 
 /** Split route hits into the cameras we avoid vs. the ones facing away. */
