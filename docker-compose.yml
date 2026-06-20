@@ -19,7 +19,9 @@ services:
       # bbox -122.7,37.1,-121.5,38.2 covers SF, Oakland, San Jose, the Peninsula and
       # North Bay. To route a different region, swap this URL and delete valhalla_tiles/.
       - tile_urls=https://github.com/nate-bowers/deflockmaps/releases/download/data-v1/bayarea.osm.pbf
-      - use_tiles_ignore_pbf=False
+      # True: serve prebuilt tiles from valhalla_tiles/valhalla_tiles.tar (fast — no
+      # build, for low-power hosts). Set False to build from the pbf above instead.
+      - use_tiles_ignore_pbf=True
       - force_rebuild=False
       - build_elevation=False
       - build_admins=True
