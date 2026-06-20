@@ -16,12 +16,12 @@ function monthKey(): string {
 }
 
 function redis(): Redis | null {
-  if (
-    process.env.UPSTASH_REDIS_REST_URL &&
-    process.env.UPSTASH_REDIS_REST_TOKEN
-  ) {
-    return Redis.fromEnv();
-  }
+  // Vercel's Upstash integration may expose either naming convention.
+  const url =
+    process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const token =
+    process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (url && token) return new Redis({ url, token });
   return null;
 }
 
