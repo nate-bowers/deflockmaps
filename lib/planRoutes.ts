@@ -75,16 +75,21 @@ function partitionHits(hits: CameraHit[], useDirection: boolean) {
 // exclude-polygon budget in both modes.
 const LIMITS: Record<
   AvoidanceLevel,
-  { passes: number; calls: number; excluded: number; budgetMs: number }
+  { passes: number; calls: number; budgetMs: number }
 > = {
   // budgetMs is a hard wall-clock cap: the sweep returns the best routes found
   // so far when it's hit, so the UI stays responsive even if the remote engine
   // is slow. balanced feels snappy; max trades time for thoroughness.
   // With the exclude-all-first strategy a camera-free route is usually found in
   // ~2 calls, so these are mostly safety ceilings for chokepoint-heavy routes.
-  balanced: { passes: 8, calls: 40, excluded: 80, budgetMs: 12000 },
-  max: { passes: 24, calls: 120, excluded: 160, budgetMs: 30000 },
+  balanced: { passes: 8, calls: 40, budgetMs: 12000 },
+  max: { passes: 24, calls: 120, budgetMs: 30000 },
 };
+
+// Valhalla caps the TOTAL perimeter of all exclude_polygons at 10,000 m. Each
+// camera bubble (~40 m radius octagon) is ~245 m, so we cap the exclusion set
+// well under that (38 × 245 ≈ 9,300 m, leaving room for a probe's +1).
+const MAX_EXCLUDED = 38;
 
 // Per pass, try this many camera exclusions concurrently. Each Valhalla call to a
 // remote engine costs a full network round-trip, so parallelizing the trials
@@ -148,6 +153,11 @@ export async function planRoutes(
       return await valhallaRoute(start, end, polysFor(extra));
     } catch (err) {
       if (err instanceof NoRouteError) return null;
+      // Hitting the exclude-polygon perimeter limit shouldn't crash the request —
+      // treat it as "can't route this exclusion set" and stop gracefully.
+      if (/exclude_polygons|circumference/i.test((err as Error).message)) {
+        return null;
+      }
       throw err;
     }
   };
@@ -168,12 +178,15 @@ export async function planRoutes(
     captured.length > 0 &&
     raw.length <= limits.passes &&
     calls < limits.calls &&
-    excluded.size < limits.excluded &&
+    excluded.size < MAX_EXCLUDED &&
     Date.now() < deadline
   ) {
-    const batch = captured.filter(
+    const remaining = captured.filter(
       (c) => !excluded.has(c.id) && !undodgeable.has(c.id),
     );
+    if (remaining.length === 0) break;
+    // Stay under Valhalla's exclude-polygon perimeter cap.
+    const batch = remaining.slice(0, MAX_EXCLUDED - excluded.size);
     if (batch.length === 0) break;
 
     const whole = await tryRoute(batch);
