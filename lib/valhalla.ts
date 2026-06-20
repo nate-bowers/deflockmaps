@@ -18,6 +18,14 @@ export class NoRouteError extends Error {
   }
 }
 
+/** A single engine call took too long and was aborted (engine slow/overloaded). */
+export class EngineTimeoutError extends Error {
+  constructor(message = "Routing engine timed out") {
+    super(message);
+    this.name = "EngineTimeoutError";
+  }
+}
+
 /**
  * Request a driving route from Valhalla, optionally hard-avoiding a set of
  * polygons (used to exclude camera locations).
@@ -26,6 +34,7 @@ export async function valhallaRoute(
   start: LatLng,
   end: LatLng,
   excludePolygons: [number, number][][] = [],
+  timeoutMs = 20000,
 ): Promise<RouteResult> {
   const body = {
     locations: [
@@ -37,17 +46,28 @@ export async function valhallaRoute(
     ...(excludePolygons.length ? { exclude_polygons: excludePolygons } : {}),
   };
 
+  // Hard per-call timeout so one slow/hung engine call can't run past the
+  // serverless function's wall-clock limit (which would kill the whole request
+  // and return a non-JSON error page to the client).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.max(1, timeoutMs));
   let res: Response;
   try {
     res = await fetch(`${VALHALLA_URL}/route`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: ctrl.signal,
     });
   } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new EngineTimeoutError();
+    }
     throw new Error(
       `Could not reach Valhalla at ${VALHALLA_URL}. Is the container up and finished building? (${(err as Error).message})`,
     );
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!res.ok) {

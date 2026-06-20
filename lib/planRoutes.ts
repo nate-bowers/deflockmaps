@@ -19,7 +19,12 @@ import {
   type CameraHit,
   type LatLng,
 } from "./geo";
-import { NoRouteError, valhallaRoute, type RouteResult } from "./valhalla";
+import {
+  EngineTimeoutError,
+  NoRouteError,
+  valhallaRoute,
+  type RouteResult,
+} from "./valhalla";
 
 export type RouteOption = {
   id: string;
@@ -91,7 +96,7 @@ const LIMITS: Record<
   // dozens of passes and a few hundred calls to fully unwind. budgetMs is the
   // real safety wall; passes/calls are generous ceilings beneath it.
   balanced: { passes: 12, calls: 60, budgetMs: 15000 },
-  max: { passes: 80, calls: 500, budgetMs: 55000 },
+  max: { passes: 80, calls: 500, budgetMs: 50000 },
 };
 
 // Valhalla caps the TOTAL perimeter of all exclude_polygons at 10,000 m. Each
@@ -155,14 +160,27 @@ export async function planRoutes(
     return avoided;
   };
 
+  const deadline = Date.now() + limits.budgetMs;
+
+  // Cap each engine call at the time left in the budget (never more than 15s for
+  // a single call). This guarantees no call runs past the deadline, so the whole
+  // request finishes well under the serverless function's wall-clock limit — a
+  // hung engine can't cause a function timeout and the non-JSON error page that
+  // comes with it.
+  const callTimeout = () =>
+    Math.max(1000, Math.min(15000, deadline - Date.now()));
+
   // One routing attempt with the current exclusions (+ optional extras).
-  // Returns the route, or null when no route exists (a chokepoint is blocked).
+  // Returns the route, or null when no route exists (a chokepoint is blocked)
+  // or this single call timed out (engine slow) — both are non-fatal: the sweep
+  // just skips this exclusion set and keeps the best route found so far.
   const tryRoute = async (extra: Camera[] = []): Promise<RouteResult | null> => {
     calls++;
     try {
-      return await valhallaRoute(start, end, polysFor(extra));
+      return await valhallaRoute(start, end, polysFor(extra), callTimeout());
     } catch (err) {
       if (err instanceof NoRouteError) return null;
+      if (err instanceof EngineTimeoutError) return null;
       // Hitting the exclude-polygon perimeter limit shouldn't crash the request —
       // treat it as "can't route this exclusion set" and stop gracefully.
       if (/exclude_polygons|circumference/i.test((err as Error).message)) {
@@ -172,10 +190,19 @@ export async function planRoutes(
     }
   };
 
-  const deadline = Date.now() + limits.budgetMs;
-
-  // Baseline fastest route (no avoidance).
-  let current = await valhallaRoute(start, end, []);
+  // Baseline fastest route (no avoidance). If even this times out the engine is
+  // overloaded/unreachable — surface a clear error rather than a parse failure.
+  let current: RouteResult;
+  try {
+    current = await valhallaRoute(start, end, [], callTimeout());
+  } catch (err) {
+    if (err instanceof EngineTimeoutError) {
+      throw new Error(
+        "The routing engine is busy right now — please try again in a moment.",
+      );
+    }
+    throw err;
+  }
   calls++;
   let captured = record(current);
 

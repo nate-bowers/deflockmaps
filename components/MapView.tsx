@@ -365,10 +365,24 @@ export default function MapView() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ start, end, useDirection, level }),
         });
-        const json = await res.json();
+        // The response isn't always JSON: a serverless timeout/gateway error
+        // returns a plain-text or HTML page. Read text and parse defensively so
+        // the UI shows a real message instead of a JSON parse error.
+        const text = await res.text();
+        let json: (PlanResult & { error?: string }) | null = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch {
+          json = null;
+        }
         if (cancelled) return;
-        if (!res.ok) {
-          setError(json.error ?? "Routing failed");
+        if (!res.ok || !json) {
+          setError(
+            json?.error ??
+              (res.status === 504 || res.status === 408
+                ? "That route took too long for the engine — try again, or switch to Balanced for a faster result."
+                : `Routing failed (${res.status}). Please try again.`),
+          );
           return;
         }
         setResult(json);
