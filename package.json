@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@upstash/redis": "^1.38.0",
     "@vercel/blob": "^2.4.1",
     "maplibre-gl": "^5.24.0",
     "next": "16.2.9",

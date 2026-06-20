@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { clientIp, rateLimit } from "@/lib/rateLimit";
-import { blobConfigured, checkAndRecord } from "@/lib/usage";
+import { usageConfigured, checkAndRecord } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
 
 // Hard monthly cap on paid (Mapbox) geocoding so we never hit paid overage.
-// Set below Mapbox's 100k/mo free tier to leave a safety margin for races.
-const MAPBOX_MONTHLY_CAP = 95_000;
+// Set comfortably below Mapbox's 100k/mo free tier as a safety margin.
+const MAPBOX_MONTHLY_CAP = 90_000;
 
 // Geocoding for the address autocomplete. Default provider is **Photon**
 // (komoot) — free, no key, and purpose-built for type-ahead (fast, good prefix
@@ -105,7 +105,7 @@ export async function GET(req: Request) {
   let results: Result[];
   let capped = false;
   try {
-    if (token && blobConfigured()) {
+    if (token && usageConfigured()) {
       const { allowed } = await checkAndRecord(MAPBOX_MONTHLY_CAP);
       if (allowed) {
         try {
