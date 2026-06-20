@@ -5,6 +5,10 @@ import { NoRouteError } from "@/lib/valhalla";
 import { clientIp, rateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
+// Max avoidance peels cameras one-by-one over many engine round-trips and can
+// run up to ~55s (see LIMITS.max.budgetMs). Give the function headroom so it
+// isn't killed mid-sweep. 60s is the Hobby-plan ceiling.
+export const maxDuration = 60;
 
 type Pt = { lat: number; lng: number };
 

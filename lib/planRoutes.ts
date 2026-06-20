@@ -81,8 +81,12 @@ const LIMITS: Record<
   // is slow. balanced feels snappy; max trades time for thoroughness.
   // With the exclude-all-first strategy a camera-free route is usually found in
   // ~2 calls, so these are mostly safety ceilings for chokepoint-heavy routes.
-  balanced: { passes: 8, calls: 40, budgetMs: 12000 },
-  max: { passes: 24, calls: 120, budgetMs: 30000 },
+  // max's greedy peel commits ~1 camera per pass (probing TRIALS_PER_PASS in
+  // parallel), so a long, camera-dense route (Tiburon→Atherton hits ~35) needs
+  // dozens of passes and a few hundred calls to fully unwind. budgetMs is the
+  // real safety wall; passes/calls are generous ceilings beneath it.
+  balanced: { passes: 12, calls: 60, budgetMs: 15000 },
+  max: { passes: 80, calls: 500, budgetMs: 55000 },
 };
 
 // Valhalla caps the TOTAL perimeter of all exclude_polygons at 10,000 m. Each
@@ -168,11 +172,15 @@ export async function planRoutes(
   calls++;
   let captured = record(current);
 
-  // Exclude ALL the cameras the route currently passes, at once, and reroute.
-  // Where parallel streets exist this lands the camera-free route in one extra
-  // call. Only when the whole-batch exclusion has no route (a camera sits on the
-  // only through-road) do we probe the batch in parallel to learn which cameras
-  // are actually dodgeable, exclude those, and continue.
+  // Two-mode dodge:
+  //  - BULK: exclude every camera the route passes at once and reroute. On easy
+  //    routes (parallel streets nearby) this lands camera-free in a couple calls.
+  //  - GREEDY: when bulk stops helping (the big detour just hits new cameras, or
+  //    a chokepoint), peel cameras off ONE at a time — each pass probes several
+  //    candidates in parallel and commits the exclusion that yields the fewest
+  //    cameras. Slower, but it finds the efficient side-street path on long,
+  //    camera-dense routes (where bulk dumps you onto 30+ new cameras).
+  let bulk = true;
   while (
     captured.length > 0 &&
     raw.length <= limits.passes &&
@@ -180,41 +188,47 @@ export async function planRoutes(
     excluded.size < MAX_EXCLUDED &&
     Date.now() < deadline
   ) {
-    const remaining = captured.filter(
+    const candidates = captured.filter(
       (c) => !excluded.has(c.id) && !undodgeable.has(c.id),
     );
-    if (remaining.length === 0) break;
-    // Stay under Valhalla's exclude-polygon perimeter cap.
-    const batch = remaining.slice(0, MAX_EXCLUDED - excluded.size);
-    if (batch.length === 0) break;
+    if (candidates.length === 0) break;
 
-    const whole = await tryRoute(batch);
-    if (whole) {
-      batch.forEach((c) => excluded.set(c.id, c));
-      current = whole;
-      captured = record(current);
-      continue;
+    if (bulk) {
+      const batch = candidates.slice(0, MAX_EXCLUDED - excluded.size);
+      const whole = await tryRoute(batch);
+      const avoided = whole ? measure(whole).avoided : null;
+      if (whole && avoided && avoided.length < captured.length) {
+        batch.forEach((c) => excluded.set(c.id, c));
+        current = whole;
+        captured = avoided;
+        record(current);
+        continue;
+      }
+      bulk = false; // bulk exclusion stopped reducing cameras — go per-camera
     }
 
-    // Chokepoint in the batch — find the dodgeable ones in parallel.
-    const probe = batch.slice(0, TRIALS_PER_PASS);
+    const probe = candidates.slice(0, TRIALS_PER_PASS);
     const results = await Promise.all(
-      probe.map(async (c) => ({ c, route: await tryRoute([c]) })),
+      probe.map(async (c) => {
+        const route = await tryRoute([c]);
+        return { c, route, avoided: route ? measure(route).avoided : null };
+      }),
     );
-    let progressed = false;
-    for (const { c, route } of results) {
-      if (route) {
-        excluded.set(c.id, c);
-        progressed = true;
-      } else {
-        undodgeable.add(c.id);
+    let best: { c: Camera; route: RouteResult; avoided: Camera[] } | null = null;
+    for (const r of results) {
+      if (!r.route || !r.avoided) {
+        undodgeable.add(r.c.id); // can't route excluding this one — chokepoint
+        continue;
+      }
+      if (!best || r.avoided.length < best.avoided.length) {
+        best = { c: r.c, route: r.route, avoided: r.avoided };
       }
     }
-    if (!progressed) break; // every probed camera is on the only road
-    const after = await tryRoute();
-    if (!after) break; // excluding the dodgeable set together blocks routing
-    current = after;
-    captured = record(current);
+    if (!best) break; // every probed camera is un-dodgeable
+    excluded.set(best.c.id, best.c);
+    current = best.route;
+    captured = best.avoided;
+    record(current);
   }
 
   const cameraFreeExists = raw.some((o) => o.cameraCount === 0);
