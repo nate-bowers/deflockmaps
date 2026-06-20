@@ -48,10 +48,15 @@ export type PlanResult = {
 // How close the route passes a camera to count as "captured". ALPRs read plates
 // from a fair distance, so this is generous — better to dodge a camera you'd
 // only graze than to drive right past it. It MUST stay below the exclusion
-// radius's apothem (~37 m for a 40 m octagon) so an excluded camera, with the
+// radius's apothem (~32 m for a 35 m octagon) so an excluded camera, with the
 // reroute forced outside its bubble, is never re-counted as a hit.
 const ROUTE_THRESHOLD_M = 30; // how close to the line counts as "captured"
-const EXCLUDE_RADIUS_M = 40; // hard-avoid bubble per camera (reliably blocks the road)
+// Bubble radius is kept as small as the threshold allows (apothem 35·cos22.5°
+// ≈ 32 m > 30 m) so its perimeter is small — that lets MORE cameras fit under
+// Valhalla's 10 km total exclude-polygon budget, which is the real ceiling on
+// how deeply a long, camera-dense route can be peeled. Still wide enough
+// (~64 m across) to reliably block the road.
+const EXCLUDE_RADIUS_M = 35; // hard-avoid bubble per camera
 
 /** Split route hits into the cameras we avoid vs. the ones facing away. */
 function partitionHits(hits: CameraHit[], useDirection: boolean) {
@@ -90,9 +95,11 @@ const LIMITS: Record<
 };
 
 // Valhalla caps the TOTAL perimeter of all exclude_polygons at 10,000 m. Each
-// camera bubble (~40 m radius octagon) is ~245 m, so we cap the exclusion set
-// well under that (38 × 245 ≈ 9,300 m, leaving room for a probe's +1).
-const MAX_EXCLUDED = 38;
+// camera bubble (35 m radius octagon) is ~214 m, so 45 bubbles ≈ 9,640 m stays
+// just under the cap (a probe or batch can momentarily send all 45). Smaller
+// bubbles than before (was 40 m/38) buy ~7 more exclusions, which is what lets
+// a saturated corridor peel from ~12 down to ~6 cameras.
+const MAX_EXCLUDED = 45;
 
 // Per pass, try this many camera exclusions concurrently. Each Valhalla call to a
 // remote engine costs a full network round-trip, so parallelizing the trials
