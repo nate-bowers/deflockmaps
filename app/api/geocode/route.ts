@@ -68,9 +68,15 @@ async function viaMapbox(q: string, token: string): Promise<Result[]> {
   const data = (await res.json()) as {
     features?: Array<{ center: [number, number]; place_name: string }>;
   };
+  const seen = new Set<string>();
   return (data.features ?? [])
     .filter((f) => f.center)
-    .map((f) => ({ lat: f.center[1], lng: f.center[0], label: f.place_name }));
+    .map((f) => ({ lat: f.center[1], lng: f.center[0], label: f.place_name }))
+    .filter((r) => {
+      if (seen.has(r.label)) return false;
+      seen.add(r.label);
+      return true;
+    });
 }
 
 export async function GET(req: Request) {
