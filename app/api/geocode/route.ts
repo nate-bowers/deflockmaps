@@ -3,6 +3,8 @@ import { clientIp, rateLimit } from "@/lib/rateLimit";
 import { usageConfigured, checkAndRecord } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
+// Co-locate with the route function / San Jose engine (see app/api/route).
+export const preferredRegion = "sfo1";
 
 // Hard monthly cap on paid (Mapbox) geocoding so we never hit paid overage.
 // Set comfortably below Mapbox's 100k/mo free tier as a safety margin.

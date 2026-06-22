@@ -123,6 +123,8 @@ while true; do
       --boot-volume-size-in-gbs "$BOOT_GB" \
       --ssh-authorized-keys-file "$SSH_KEY_FILE" \
       --wait-for-state RUNNING \
+      --connection-timeout 20 \
+      --read-timeout 60 \
       2>&1)"
     rc=$?
 

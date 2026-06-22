@@ -9,6 +9,11 @@ export const dynamic = "force-dynamic";
 // run up to ~55s (see LIMITS.max.budgetMs). Give the function headroom so it
 // isn't killed mid-sweep. 60s is the Hobby-plan ceiling.
 export const maxDuration = 60;
+// Run this function next to the Valhalla engine (Oracle us-sanjose-1). A single
+// route fires dozens of sequential engine calls, so co-locating in San Jose
+// (sfo1) cuts the per-call round-trip that would otherwise be cross-country.
+// If the engine ever moves regions, update this to match.
+export const preferredRegion = "sfo1";
 
 type Pt = { lat: number; lng: number };
 
