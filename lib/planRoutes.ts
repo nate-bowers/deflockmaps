@@ -55,7 +55,7 @@ export type PlanResult = {
 // only graze than to drive right past it. It MUST stay below the exclusion
 // radius's apothem (~32 m for a 35 m octagon) so an excluded camera, with the
 // reroute forced outside its bubble, is never re-counted as a hit.
-const ROUTE_THRESHOLD_M = 30; // how close to the line counts as "captured"
+export const ROUTE_THRESHOLD_M = 30; // how close to the line counts as "captured"
 // Bubble radius is kept as small as the threshold allows (apothem 35·cos22.5°
 // ≈ 32 m > 30 m) so its perimeter is small — that lets MORE cameras fit under
 // Valhalla's 10 km total exclude-polygon budget, which is the real ceiling on
@@ -64,7 +64,7 @@ const ROUTE_THRESHOLD_M = 30; // how close to the line counts as "captured"
 const EXCLUDE_RADIUS_M = 35; // hard-avoid bubble per camera
 
 /** Split route hits into the cameras we avoid vs. the ones facing away. */
-function partitionHits(hits: CameraHit[], useDirection: boolean) {
+export function partitionHits(hits: CameraHit[], useDirection: boolean) {
   if (!useDirection) {
     return { avoided: hits.map((h) => h.camera), facingAway: [] as Camera[] };
   }
@@ -306,7 +306,7 @@ export async function planRoutes(
  * only kept if it cuts cameras by a meaningful step from the previous kept
  * option AND from the fewest-cameras endpoint.
  */
-function thinOptions(frontier: RouteOption[]): RouteOption[] {
+export function thinOptions(frontier: RouteOption[]): RouteOption[] {
   if (frontier.length <= 2) return frontier;
 
   const fastest = frontier[0];
@@ -346,7 +346,7 @@ function thinOptions(frontier: RouteOption[]): RouteOption[] {
  * only if it captures strictly fewer cameras than every faster route kept so
  * far. Also dedupes near-identical routes.
  */
-function paretoFilter(routes: RouteOption[]): RouteOption[] {
+export function paretoFilter(routes: RouteOption[]): RouteOption[] {
   const seen = new Set<string>();
   const unique = routes.filter((r) => {
     const key = `${Math.round(r.timeSec / 15)}:${r.cameraCount}`;
@@ -372,7 +372,7 @@ function paretoFilter(routes: RouteOption[]): RouteOption[] {
   return kept;
 }
 
-function labelOptions(options: RouteOption[], cameraFreeExists: boolean): void {
+export function labelOptions(options: RouteOption[], cameraFreeExists: boolean): void {
   const last = options.length - 1;
   options.forEach((opt, i) => {
     if (i === 0) {

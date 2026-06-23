@@ -191,27 +191,81 @@ export type CameraHit = {
  * Return the cameras within `thresholdM` meters of a route polyline, each
  * annotated with the direction of travel past it and a capture classification.
  * The route is an ordered list of points (start → end).
+ *
+ * This is the route planner's hot path — it runs on the baseline route plus
+ * every probe and commit of the avoidance sweep, so a naive O(cameras × segments)
+ * scan can eat the whole time budget on a long, camera-dense route (and would be
+ * untenable at national scale). We bucket the cameras into a uniform spatial grid
+ * once, then for each segment only test cameras in the cells its (threshold-
+ * padded) bounding box covers. Result is identical to the brute-force scan: every
+ * camera that lands within `thresholdM` of the polyline is guaranteed to be
+ * considered against its true-nearest segment (a one-cell safety ring absorbs any
+ * latitude/projection slack), and we keep the same first-nearest tie-breaking.
  */
 export function camerasOnRoute(
   route: LatLng[],
   cameras: Camera[],
   thresholdM = 30,
 ): CameraHit[] {
-  if (route.length < 2) return [];
-  const hits: CameraHit[] = [];
-  for (const cam of cameras) {
-    const p = { lat: cam.lat, lng: cam.lon };
-    let minDist = Infinity;
-    let bestSeg = 0;
-    for (let i = 0; i + 1 < route.length; i++) {
-      const d = pointToSegmentMeters(p, route[i], route[i + 1]);
-      if (d < minDist) {
-        minDist = d;
-        bestSeg = i;
+  if (route.length < 2 || cameras.length === 0) return [];
+
+  // Grid sizing. Cell ≈ 250 m. Use the smallest cos(lat) on the route (highest
+  // |latitude|) for the longitude scale so a cell/pad is never *under*-sized in
+  // meters anywhere along the route — being generous only costs a few extra
+  // candidate checks; being tight could miss a hit. Camera bucketing and the
+  // per-segment cell range use the SAME dLat/dLng, so cells always align.
+  const CELL_M = 250;
+  let maxAbsLat = 0;
+  for (const p of route) maxAbsLat = Math.max(maxAbsLat, Math.abs(p.lat));
+  const cosRef = Math.max(0.01, Math.cos(toRad(maxAbsLat)));
+  const dLat = CELL_M / 111_320;
+  const dLng = CELL_M / (111_320 * cosRef);
+  const cellOf = (v: number, step: number) => Math.floor(v / step);
+
+  const grid = new Map<string, number[]>(); // "clat:clng" -> camera indices
+  for (let ci = 0; ci < cameras.length; ci++) {
+    const key = `${cellOf(cameras[ci].lat, dLat)}:${cellOf(cameras[ci].lon, dLng)}`;
+    const bucket = grid.get(key);
+    if (bucket) bucket.push(ci);
+    else grid.set(key, [ci]);
+  }
+
+  const minDist = new Float64Array(cameras.length).fill(Infinity);
+  const bestSeg = new Int32Array(cameras.length).fill(-1);
+
+  const padLat = thresholdM / 111_320;
+  const padLng = thresholdM / (111_320 * cosRef);
+
+  for (let i = 0; i + 1 < route.length; i++) {
+    const a = route[i];
+    const b = route[i + 1];
+    // +1 cell safety ring around the threshold-padded segment bbox.
+    const clatLo = cellOf(Math.min(a.lat, b.lat) - padLat, dLat) - 1;
+    const clatHi = cellOf(Math.max(a.lat, b.lat) + padLat, dLat) + 1;
+    const clngLo = cellOf(Math.min(a.lng, b.lng) - padLng, dLng) - 1;
+    const clngHi = cellOf(Math.max(a.lng, b.lng) + padLng, dLng) + 1;
+    for (let cl = clatLo; cl <= clatHi; cl++) {
+      for (let cg = clngLo; cg <= clngHi; cg++) {
+        const bucket = grid.get(`${cl}:${cg}`);
+        if (!bucket) continue;
+        for (const ci of bucket) {
+          const cam = cameras[ci];
+          const d = pointToSegmentMeters({ lat: cam.lat, lng: cam.lon }, a, b);
+          if (d < minDist[ci]) {
+            minDist[ci] = d;
+            bestSeg[ci] = i;
+          }
+        }
       }
     }
-    if (minDist <= thresholdM) {
-      const travelBearing = bearing(route[bestSeg], route[bestSeg + 1]);
+  }
+
+  const hits: CameraHit[] = [];
+  for (let ci = 0; ci < cameras.length; ci++) {
+    if (minDist[ci] <= thresholdM) {
+      const seg = bestSeg[ci];
+      const travelBearing = bearing(route[seg], route[seg + 1]);
+      const cam = cameras[ci];
       hits.push({
         camera: cam,
         travelBearing,
