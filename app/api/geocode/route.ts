@@ -32,10 +32,10 @@ function dedupeJoin(parts: (string | undefined)[]): string {
   return clean.filter((v, i) => v !== clean[i - 1]).join(", ");
 }
 
-async function viaPhoton(q: string): Promise<Result[]> {
+async function viaPhoton(q: string, biasLat: number, biasLon: number): Promise<Result[]> {
   const url =
     `${PHOTON}?q=${encodeURIComponent(q)}&limit=6&lang=en` +
-    `&lat=${BIAS_LAT}&lon=${BIAS_LON}`;
+    `&lat=${biasLat}&lon=${biasLon}`;
   const res = await fetch(url, {
     headers: { "User-Agent": "deflockmaps/0.1 (camera-avoidance routing)" },
   });
@@ -61,10 +61,10 @@ async function viaPhoton(q: string): Promise<Result[]> {
     });
 }
 
-async function viaMapbox(q: string, token: string): Promise<Result[]> {
+async function viaMapbox(q: string, token: string, biasLat: number, biasLon: number): Promise<Result[]> {
   const url =
     `${MAPBOX}${encodeURIComponent(q)}.json?access_token=${token}` +
-    `&autocomplete=true&limit=6&country=us&proximity=${BIAS_LON},${BIAS_LAT}`;
+    `&autocomplete=true&limit=6&country=us&proximity=${biasLon},${biasLat}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Mapbox HTTP ${res.status}`);
   const data = (await res.json()) as {
@@ -82,12 +82,22 @@ async function viaMapbox(q: string, token: string): Promise<Result[]> {
 }
 
 export async function GET(req: Request) {
-  const q = new URL(req.url).searchParams.get("q")?.trim();
+  const sp = new URL(req.url).searchParams;
+  const q = sp.get("q")?.trim();
   if (!q) {
     return NextResponse.json({ error: "Missing ?q" }, { status: 400 });
   }
 
-  const cached = cache.get(q.toLowerCase());
+  // Optional proximity bias from the caller's map viewport; falls back to the
+  // default region when absent/invalid (so autocomplete ranks nearby results
+  // wherever the user is, not just the Bay Area).
+  const blat = sp.get("lat");
+  const blon = sp.get("lon");
+  const biasLat = blat && Number.isFinite(+blat) && Math.abs(+blat) <= 90 ? +blat : BIAS_LAT;
+  const biasLon = blon && Number.isFinite(+blon) && Math.abs(+blon) <= 180 ? +blon : BIAS_LON;
+  const cacheKey = `${q.toLowerCase()}|${Math.round(biasLat)},${Math.round(biasLon)}`;
+
+  const cached = cache.get(cacheKey);
   if (cached && cached.exp > Date.now()) {
     return NextResponse.json(cached.body);
   }
@@ -111,16 +121,16 @@ export async function GET(req: Request) {
       const { allowed } = await checkAndRecord(MAPBOX_MONTHLY_CAP);
       if (allowed) {
         try {
-          results = await viaMapbox(q, token);
+          results = await viaMapbox(q, token, biasLat, biasLon);
         } catch {
-          results = await viaPhoton(q); // Mapbox hiccup → free fallback
+          results = await viaPhoton(q, biasLat, biasLon); // Mapbox hiccup → free fallback
         }
       } else {
         capped = true;
-        results = await viaPhoton(q);
+        results = await viaPhoton(q, biasLat, biasLon);
       }
     } else {
-      results = await viaPhoton(q);
+      results = await viaPhoton(q, biasLat, biasLon);
     }
   } catch (err) {
     return NextResponse.json(
@@ -138,6 +148,6 @@ export async function GET(req: Request) {
     : undefined;
   const body = { results, capped, message: cappedMsg };
   // Don't cache the capped state (it should clear when the month rolls over).
-  if (!capped) cache.set(q.toLowerCase(), { body, exp: Date.now() + CACHE_TTL });
+  if (!capped) cache.set(cacheKey, { body, exp: Date.now() + CACHE_TTL });
   return NextResponse.json(body);
 }

@@ -12,6 +12,8 @@ import {
   classifyCamera,
   haversine,
   pointToSegmentMeters,
+  segInCone,
+  FOV_RANGE_M,
   type Camera,
   type LatLng,
 } from "./geo";
@@ -116,12 +118,12 @@ export function bakeCameraPenalty(g: RoadGraph, cameras: Camera[], thresholdM = 
     const k = `${Math.floor(c.lat / CELL)}:${Math.floor(c.lon / CELL)}`;
     const b = grid.get(k); if (b) b.push(ci); else grid.set(k, [ci]);
   }
-  const padLat = thresholdM / 111_320;
+  const padLat = FOV_RANGE_M / 111_320;
   for (let e = 0; e < g.E; e++) {
     const a = { lat: g.nLat[g.eFrom[e]], lng: g.nLng[g.eFrom[e]] };
     const b = { lat: g.nLat[g.eTo[e]], lng: g.nLng[g.eTo[e]] };
     const tb = bearing(a, b);
-    const padLng = thresholdM / (111_320 * Math.max(0.01, Math.cos((a.lat * Math.PI) / 180)));
+    const padLng = FOV_RANGE_M / (111_320 * Math.max(0.01, Math.cos((a.lat * Math.PI) / 180)));
     const clo = Math.floor((Math.min(a.lat, b.lat) - padLat) / CELL) - 1;
     const chi = Math.floor((Math.max(a.lat, b.lat) + padLat) / CELL) + 1;
     const glo = Math.floor((Math.min(a.lng, b.lng) - padLng) / CELL) - 1;
@@ -132,10 +134,18 @@ export function bakeCameraPenalty(g: RoadGraph, cameras: Camera[], thresholdM = 
       if (!bucket) continue;
       for (const ci of bucket) {
         const cam = cameras[ci];
-        if (pointToSegmentMeters({ lat: cam.lat, lng: cam.lon }, a, b) <= thresholdM) {
-          all++;
-          if (classifyCamera(cam, tb) !== "opposite") cap++;
-        }
+        // Captured if within the proximity floor OR inside the camera's view cone
+        // (down its sightline / onto a cross-street) — catches cars in view that a
+        // plain radius misses.
+        const d = pointToSegmentMeters({ lat: cam.lat, lng: cam.lon }, a, b);
+        if (d > FOV_RANGE_M) continue;
+        const captured =
+          d <= thresholdM ||
+          (cam.direction != null &&
+            segInCone(cam.lat, cam.lon, cam.direction, a, b));
+        if (!captured) continue;
+        all++;
+        if (classifyCamera(cam, tb) !== "opposite") cap++;
       }
     }
     g.ePen[e] = cap;

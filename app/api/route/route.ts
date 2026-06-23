@@ -100,7 +100,7 @@ export async function POST(req: Request) {
   } catch (err) {
     if (err instanceof NoRouteError) {
       return NextResponse.json(
-        { error: "No route exists between these points (within California)." },
+        { error: "No route exists between these points." },
         { status: 422 },
       );
     }

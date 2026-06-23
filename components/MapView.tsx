@@ -144,6 +144,30 @@ export default function MapView() {
       "bottom-left",
     );
 
+    // Center on the user's location if they allow it; INITIAL_CENTER (Bay Area)
+    // is only the fallback. Skip if the map has already been moved (e.g. the user
+    // panned or set a point before geolocation resolved), so it never yanks the
+    // view out from under them.
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const c = map.getCenter();
+          const untouched =
+            Math.abs(c.lng - INITIAL_CENTER[0]) < 1e-4 &&
+            Math.abs(c.lat - INITIAL_CENTER[1]) < 1e-4;
+          if (untouched) {
+            map.easeTo({
+              center: [pos.coords.longitude, pos.coords.latitude],
+              zoom: 12,
+              duration: 800,
+            });
+          }
+        },
+        () => {},
+        { enableHighAccuracy: false, timeout: 5000, maximumAge: 600_000 },
+      );
+    }
+
     const setupLayers = async () => {
       const empty: GeoJSON.FeatureCollection = {
         type: "FeatureCollection",
@@ -564,7 +588,7 @@ export default function MapView() {
           </div>
           <p className="mt-1 text-xs text-zinc-500">
             {cameraCount != null
-              ? `${cameraCount.toLocaleString()} ALPR cameras · Bay Area`
+              ? `${cameraCount.toLocaleString()} ALPR cameras`
               : "Loading cameras…"}
           </p>
 
@@ -583,6 +607,10 @@ export default function MapView() {
               onChange={setStartText}
               onSelect={(pt) => setStartPt(pt)}
               onCapped={setGeocodeCapped}
+              getBias={() => {
+                const c = mapRef.current?.getCenter();
+                return c ? [c.lat, c.lng] : null;
+              }}
             />
             <LocationInput
               placeholder="Destination — address or lat, lng"
@@ -591,6 +619,10 @@ export default function MapView() {
               onChange={setEndText}
               onSelect={(pt) => setEndPt(pt)}
               onCapped={setGeocodeCapped}
+              getBias={() => {
+                const c = mapRef.current?.getCenter();
+                return c ? [c.lat, c.lng] : null;
+              }}
             />
             <p className="text-[11px] text-zinc-500">
               Type for suggestions, or click the map to drop points.
@@ -825,6 +857,7 @@ function LocationInput({
   onChange,
   onSelect,
   onCapped,
+  getBias,
 }: {
   placeholder: string;
   value: string;
@@ -832,6 +865,8 @@ function LocationInput({
   onChange: (v: string) => void;
   onSelect: (pt: Pt) => void;
   onCapped?: (msg: string) => void;
+  /** current map center [lat, lng] to bias autocomplete toward, if available */
+  getBias?: () => [number, number] | null;
 }) {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -853,7 +888,9 @@ function LocationInput({
     const id = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/geocode?q=${encodeURIComponent(text)}`);
+        const bias = getBias?.();
+        const biasQ = bias ? `&lat=${bias[0]}&lon=${bias[1]}` : "";
+        const res = await fetch(`/api/geocode?q=${encodeURIComponent(text)}${biasQ}`);
         const json = await res.json();
         if (json.capped && json.message) onCapped?.(json.message);
         if (res.ok && Array.isArray(json.results)) {

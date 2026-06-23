@@ -180,6 +180,44 @@ export function classifyCamera(
   return "captures";
 }
 
+// Field-of-view model (opt-in via camerasOnRoute's `fov` option, used by the
+// graph planner). A directional camera doesn't just capture what's within a few
+// metres of its point — it reads plates down a cone along the way it faces. So we
+// treat a camera as seeing any road that enters that cone, which catches cars in
+// view on a cross-street or further down the sightline that a plain radius misses.
+// No FOV is stored in the data (only a bearing), so the cone is an assumption:
+// generous range + moderate half-angle, biased toward over-avoidance.
+export const FOV_RANGE_M = 75; // how far down its sightline an ALPR can read
+const FOV_HALF_ANGLE_DEG = 25; // half-width of the viewing cone
+
+/**
+ * Does a directional camera's view cone (apex at the camera, axis = `directionDeg`,
+ * reach `FOV_RANGE_M`, half-width `FOV_HALF_ANGLE_DEG`) reach the segment a–b?
+ * Sampled along the segment at ~10 m resolution — segments are short, so this is
+ * cheap, and it only runs for camera-adjacent candidate segments.
+ */
+export function segInCone(
+  camLat: number,
+  camLon: number,
+  directionDeg: number,
+  a: LatLng,
+  b: LatLng,
+): boolean {
+  const C = { lat: camLat, lng: camLon };
+  const steps = Math.max(1, Math.ceil(haversine(a, b) / 10));
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    const P = { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+    if (
+      haversine(C, P) <= FOV_RANGE_M &&
+      angularDiff(bearing(C, P), directionDeg) <= FOV_HALF_ANGLE_DEG
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type CameraHit = {
   camera: Camera;
   /** bearing of travel along the nearest route segment, 0-360 */
@@ -206,8 +244,15 @@ export function camerasOnRoute(
   route: LatLng[],
   cameras: Camera[],
   thresholdM = 30,
+  opts?: { fov?: boolean },
 ): CameraHit[] {
   if (route.length < 2 || cameras.length === 0) return [];
+
+  // With FOV on, a camera can capture from up to FOV_RANGE_M down its sightline,
+  // so the candidate search must reach that far (default off keeps the tight
+  // radius — byte-identical to the plain-radius scan the greedy planner relies on).
+  const fov = opts?.fov ?? false;
+  const search = fov ? Math.max(thresholdM, FOV_RANGE_M) : thresholdM;
 
   // Grid sizing. Cell ≈ 250 m. Use the smallest cos(lat) on the route (highest
   // |latitude|) for the longitude scale so a cell/pad is never *under*-sized in
@@ -230,16 +275,18 @@ export function camerasOnRoute(
     else grid.set(key, [ci]);
   }
 
+  // Track the nearest *capturing* segment per camera (so the classification uses
+  // the segment that actually sees it, whether via radius or cone).
   const minDist = new Float64Array(cameras.length).fill(Infinity);
   const bestSeg = new Int32Array(cameras.length).fill(-1);
 
-  const padLat = thresholdM / 111_320;
-  const padLng = thresholdM / (111_320 * cosRef);
+  const padLat = search / 111_320;
+  const padLng = search / (111_320 * cosRef);
 
   for (let i = 0; i + 1 < route.length; i++) {
     const a = route[i];
     const b = route[i + 1];
-    // +1 cell safety ring around the threshold-padded segment bbox.
+    // +1 cell safety ring around the (search-)padded segment bbox.
     const clatLo = cellOf(Math.min(a.lat, b.lat) - padLat, dLat) - 1;
     const clatHi = cellOf(Math.max(a.lat, b.lat) + padLat, dLat) + 1;
     const clngLo = cellOf(Math.min(a.lng, b.lng) - padLng, dLng) - 1;
@@ -251,7 +298,12 @@ export function camerasOnRoute(
         for (const ci of bucket) {
           const cam = cameras[ci];
           const d = pointToSegmentMeters({ lat: cam.lat, lng: cam.lon }, a, b);
-          if (d < minDist[ci]) {
+          if (d > search) continue;
+          const captured =
+            d <= thresholdM ||
+            (fov && cam.direction != null &&
+              segInCone(cam.lat, cam.lon, cam.direction, a, b));
+          if (captured && d < minDist[ci]) {
             minDist[ci] = d;
             bestSeg[ci] = i;
           }
@@ -262,7 +314,7 @@ export function camerasOnRoute(
 
   const hits: CameraHit[] = [];
   for (let ci = 0; ci < cameras.length; ci++) {
-    if (minDist[ci] <= thresholdM) {
+    if (bestSeg[ci] >= 0) {
       const seg = bestSeg[ci];
       const travelBearing = bearing(route[seg], route[seg + 1]);
       const cam = cameras[ci];
