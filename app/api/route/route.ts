@@ -56,6 +56,27 @@ export async function POST(req: Request) {
     );
   }
 
+  // Prefer the on-box graph planner (single-pass λ-sweep over a camera-penalized
+  // road graph) when configured. It holds the graph in memory, so it can't run in
+  // this serverless function — it lives on the always-on engine box (see
+  // server/planner.mts, DEPLOY.md). If it's unset/unreachable/errors, fall through
+  // to the bundled greedy planner so routing always works.
+  const plannerUrl = process.env.PLANNER_URL;
+  if (plannerUrl) {
+    try {
+      const r = await fetch(`${plannerUrl}/plan`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ start, end, useDirection, level }),
+        signal: AbortSignal.timeout(25_000),
+      });
+      if (r.ok) return NextResponse.json(await r.json());
+      // non-OK response → fall through to the greedy fallback below
+    } catch {
+      // unreachable / timeout → fall through to the greedy fallback below
+    }
+  }
+
   let cameras;
   try {
     const data = await loadCameras();

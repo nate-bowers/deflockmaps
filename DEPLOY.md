@@ -99,3 +99,29 @@ already keep on — so a low-traffic launch can genuinely cost **$0/mo**.
 - The geocode cache is in-memory. Same Upstash upgrade applies, or self-host Nominatim.
 - Expand coverage by editing `DEFAULT_BBOX` in `lib/overpass.ts` (and the camera
   fetch) and rebuilding the Valhalla graph for a larger region in `docker-compose.yml`.
+
+## Camera-avoidance graph planner (optional, recommended)
+
+`/api/route` uses the bundled **greedy** planner by default (Valhalla
+`exclude_polygons`) — it works everywhere but plateaus on dense routes (it can't
+reach the camera-free floor) and fires dozens of engine calls per request. The
+**graph planner service** (`server/planner.mts`) instead compiles a Flock-penalized
+road graph once and routes **single-pass** (`time + λ·cameras`), reaching the
+fewest-cameras / camera-free floor in ~0.2 s.
+
+It holds the graph in memory (~0.5 GB Bay Area; multiple GB for the US), so it
+**cannot run in a Vercel function** — run it on the always-on engine box (the
+Oracle A1; the 1 GB Micro can't hold it alongside Valhalla). On the box:
+
+```bash
+node scripts/fetch-road-graph.mjs              # pull drivable roads (Bay Area default) → road-ways.json
+npm install
+ROAD_GRAPH_WAYS=road-ways.json npm run planner # serves /plan and /health on :8090 (set PLANNER_PORT to change)
+```
+
+Then set **`PLANNER_URL=http://<box-ip>:8090`** on Vercel and redeploy. `/api/route`
+uses it when reachable and **falls back to the greedy planner** if it's unset,
+unreachable, or errors — so routing never breaks. The graph bakes camera
+positions at startup, so re-run `fetch-road-graph.mjs` (or just restart the
+service) after the daily camera refresh. Whole-US needs a US road-ways pull and
+matching RAM (the 2 OCPU / 12 GB A1 is sized for it).

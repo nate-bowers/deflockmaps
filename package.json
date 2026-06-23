@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build --webpack",
-    "start": "next start"
+    "start": "next start",
+    "planner": "tsx server/planner.mts"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.0",
@@ -21,6 +22,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tailwindcss": "^4",
+    "tsx": "^4.19.0",
     "typescript": "^5"
   }
 }
