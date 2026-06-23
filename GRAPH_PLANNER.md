@@ -117,16 +117,22 @@ restart — not built yet.
   Valhalla — a follow-up.
 - Build the Next app with `--webpack` (see `AGENTS.md`).
 
+## Field-of-view cone — DONE
+
+The planner models each directional camera's **view cone** (apex at the camera,
+axis = its `direction`, range `FOV_RANGE_M`=75 m, half-angle 25°) and penalizes
+**any edge the cone touches** — catching cars in view on cross-streets / down the
+sightline that a plain radius misses. `segInCone` in `lib/geo.ts`; baked in
+`bakeCameraPenalty` (`lib/roadGraph.ts`); the graph planner re-measures with
+`camerasOnRoute(..., { fov: true })`. **Scoped to the graph-planner path only** —
+the greedy planner and map still use the plain radius (FOV defaults off), because
+the greedy avoids via point-bubbles that can't dodge a camera seeing you down a
+cross-street. Cone params are the tuning dial (wider = more avoidance, more
+detours). To re-tune, edit `FOV_RANGE_M` / `FOV_HALF_ANGLE_DEG` in `lib/geo.ts`.
+
 ## Follow-up enhancements (not done yet)
 
-1. **Field-of-view cone penalty** — today a camera penalizes edges within 30 m in
-   its facing direction; modeling the camera's view *cone* and penalizing **any edge
-   the cone touches** catches cars in view on cross-streets / further down the
-   sightline. The data has `direction` but no stored FOV, so assume a cone
-   (≈±25°, ~60–75 m), tunable. Change is localized to `bakeCameraPenalty` in
-   `lib/roadGraph.ts` (widen the grid search to the cone range; segment-vs-cone
-   test). Verify it doesn't over-avoid against the test routes.
-2. **Valhalla-realized ETAs / legality** — realize each menu route through Valhalla
+1. **Valhalla-realized ETAs / legality** — realize each menu route through Valhalla
    (waypoints) for accurate time and to respect turn restrictions, then re-measure.
 3. **Whole-US** — `node scripts/fetch-road-graph.mjs <US bbox>` + matching RAM; also
    build US Valhalla tiles (for the greedy fallback) per DEPLOY.md.

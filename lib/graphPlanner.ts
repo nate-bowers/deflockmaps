@@ -43,9 +43,9 @@ export function planRoutesOnGraph(
   for (const lambda of ladder) {
     const r = routeOnGraph(g, src, dst, lambda, useDirection);
     if (!r) continue;
-    // Re-measure on the actual geometry with the production detector — never trust
-    // the baked penalty as the reported count.
-    const hits = camerasOnRoute(r.geometry, cameras, ROUTE_THRESHOLD_M);
+    // Re-measure on the actual geometry — never trust the baked penalty as the
+    // reported count. FOV on, to match the cone model the penalty was baked with.
+    const hits = camerasOnRoute(r.geometry, cameras, ROUTE_THRESHOLD_M, { fov: true });
     const { avoided, facingAway } = partitionHits(hits, useDirection);
     raw.push({
       id: `g-${raw.length}`,
